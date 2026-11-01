@@ -1,0 +1,57 @@
+name: Build Alien Launcher APK
+on:
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - name: Rebuild and unzip the source
+        run: |
+          cat alien-source.zip.part* > alien-source.zip
+          unzip -q alien-source.zip
+          ls horizon-android-0.7.6 | head
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: '17' }
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.12' }
+      - uses: gradle/actions/setup-gradle@v4
+        with: { gradle-version: '8.14' }
+      - name: Rust toolchain
+        run: |
+          cd horizon-android-0.7.6
+          rustup show
+          rustup target add aarch64-linux-android
+      - name: Android SDK and NDK
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null || true
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-35" "build-tools;35.0.0" "ndk;27.2.12479018"
+      - name: Prepare engine tables
+        run: |
+          set -o pipefail
+          cd horizon-android-0.7.6 && python tools/android_prepare.py 2>&1 | tee ../prepare.log
+      - name: Build arm64 APK
+        run: |
+          set -o pipefail
+          cd horizon-android-0.7.6 && python tools/android_build.py --abi arm64-v8a --public --java-home "$JAVA_HOME" --sdk "$ANDROID_HOME" --gradle "$(which gradle)" 2>&1 | tee ../build.log
+      - name: Show the errors
+        if: failure()
+        run: |
+          echo "=== ERRORS ==="
+          grep -nE -A14 '^error' build.log | head -150 || true
+          tail -40 build.log || true
+          tail -40 prepare.log || true
+      - name: Save logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs
+          path: |
+            build.log
+            prepare.log
+          if-no-files-found: ignore
+      - uses: actions/upload-artifact@v4
+        with:
+          name: alien-launcher-arm64
+          path: horizon-android-0.7.6/.local/android/apk/arm64-v8a/*.apk
